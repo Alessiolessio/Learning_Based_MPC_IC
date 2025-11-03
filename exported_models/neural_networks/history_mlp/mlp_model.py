@@ -4,7 +4,7 @@
 """
 mlp_model.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
 
 Defines the MLP (Multilayer Perceptron) model architecture.
 The architecture (number of neurons and layers) is parameterizable.

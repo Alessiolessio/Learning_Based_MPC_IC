@@ -4,7 +4,7 @@
 """
 data_preparation.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
 
 Functions to read the .csv dataset, process it, normalize,
 save the scalers (StandardScaler), and split into train/validation.

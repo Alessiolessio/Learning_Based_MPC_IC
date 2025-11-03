@@ -4,7 +4,7 @@
 """
 plotting.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
 
 Utility function for plotting loss graphs.
 """

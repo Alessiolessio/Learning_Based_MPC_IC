@@ -4,7 +4,7 @@
 """
 main.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
 
 Main script to orchestrate the MLP model training.
 ...
@@ -95,7 +95,7 @@ if __name__ == "__main__":
                         help="Path to save the trained model (.pth).")
 
     # --- Training Parameters ---
-    parser.add_argument("--epochs", type=int, default=100,
+    parser.add_argument("--epochs", type=int, default=50,
                         help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=128,
                         help="Batch size for training.")

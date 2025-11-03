@@ -4,7 +4,7 @@
 """
 training_runner.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
 
 Contains the main logic for the training and validation loop.
 """
