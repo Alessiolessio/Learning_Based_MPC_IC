@@ -37,7 +37,8 @@ def main(args):
     train_data, val_data, _, _ = prepare_data(
         args.csv_path, 
         scalers_dir=save_dir,
-        val_split_ratio=args.val_split
+        val_split_ratio=args.val_split,
+        normalize_data=True
     )
     
     if train_data is None:

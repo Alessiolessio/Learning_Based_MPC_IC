@@ -18,19 +18,23 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 from torch.utils.data import TensorDataset, random_split
 
-def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2):
+# <--- MUDANÇA: Adicionado 'normalize_data=True' como parâmetro
+def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2, normalize_data=True):
     """
-    Reads the dataset.csv, transforms, normalizes, and SPLITS it into train/validation.
+    Reads the dataset.csv, transforms, (optionally) normalizes, 
+    and SPLITS it into train/validation.
     
-    Saves the 'scaler' objects for future use.
+    Saves the 'scaler' objects for future use if normalization is enabled.
     
     Args:
         csv_path (str): Path to the CSV file.
         scalers_dir (str): Directory to save the scaler .joblib files.
         val_split_ratio (float): Proportion of the dataset to use for validation (e.g., 0.2).
+        normalize_data (bool): If True, applies StandardScaler. If False, uses raw data.
         
     Returns:
         tuple: (train_data, val_data, input_scaler, target_scaler)
+               (Scalers will be None if normalize_data is False)
                On failure, returns (None, None, None, None)
     """
     print(f"Reading and processing the dataset: {csv_path}")
@@ -65,21 +69,38 @@ def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2):
     final_inputs_df = pd.concat(all_inputs)
     final_targets_df = pd.concat(all_targets)
 
-    print("Normalizing data (StandardScaler)...")
-    input_scaler = StandardScaler()
-    target_scaler = StandardScaler()
-    input_scaler.fit(final_inputs_df)
-    target_scaler.fit(final_targets_df)
-    inputs_scaled = input_scaler.transform(final_inputs_df)
-    targets_scaled = target_scaler.transform(final_targets_df)
-    os.makedirs(scalers_dir, exist_ok=True)
-    joblib.dump(input_scaler, os.path.join(scalers_dir, 'input_scaler.joblib'))
-    joblib.dump(target_scaler, os.path.join(scalers_dir, 'target_scaler.joblib'))
-    print(f"Scalers saved to: {scalers_dir}")
+    # <--- MUDANÇA: Bloco condicional para normalização ---
+    if normalize_data:
+        print("Normalizing data (StandardScaler)...")
+        input_scaler = StandardScaler()
+        target_scaler = StandardScaler()
+        
+        input_scaler.fit(final_inputs_df)
+        target_scaler.fit(final_targets_df)
+        
+        # Usa os dados normalizados
+        inputs_to_tensor = input_scaler.transform(final_inputs_df)
+        targets_to_tensor = target_scaler.transform(final_targets_df)
+        
+        os.makedirs(scalers_dir, exist_ok=True)
+        joblib.dump(input_scaler, os.path.join(scalers_dir, 'input_scaler.joblib'))
+        joblib.dump(target_scaler, os.path.join(scalers_dir, 'target_scaler.joblib'))
+        print(f"Scalers saved to: {scalers_dir}")
+    
+    else:
+        print("Normalization skipped. Using raw data.")
+        # Define scalers como None para consistência no retorno
+        input_scaler = None
+        target_scaler = None
+        
+        # Usa os dados brutos (convertidos para numpy array)
+        inputs_to_tensor = final_inputs_df.values
+        targets_to_tensor = final_targets_df.values
+    # <--- FIM DA MUDANÇA ---
 
-    # Convert the NORMALIZED data to Tensors
-    inputs_tensor = torch.tensor(inputs_scaled, dtype=torch.float32)
-    targets_tensor = torch.tensor(targets_scaled, dtype=torch.float32)
+    # Converte os dados (normalizados ou brutos) para Tensores
+    inputs_tensor = torch.tensor(inputs_to_tensor, dtype=torch.float32)
+    targets_tensor = torch.tensor(targets_to_tensor, dtype=torch.float32)
 
     print(f"Processing complete. Total of {len(inputs_tensor)} samples generated.")
 
@@ -96,5 +117,5 @@ def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2):
     
     print(f"Split complete: {train_len} train samples, {val_len} validation samples.")
 
-    # Return the already split data and the scalers
+    # Retorna os dados divididos e os scalers (que podem ser None)
     return train_data, val_data, input_scaler, target_scaler

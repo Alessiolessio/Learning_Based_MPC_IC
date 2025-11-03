@@ -54,6 +54,7 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
         # --- Training Phase ---
         model.train() # Puts the model in "train" mode
         train_loss = 0.0
+        # m = 0
         
         for x_batch, y_batch in train_loader:
             # 1. Make the prediction
@@ -70,15 +71,20 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
             
             # 5. Update the network weights
             optimizer.step()
-            
+            # print(f"Training Loss {loss.item()}")
+
             train_loss += loss.item()
+            # m += 1
             
+        # print(f"Train Loss antes de dividir {train_loss}")
         train_loss /= len(train_loader)
-        train_losses.append(train_loss)
+        if epoch > 0:   # Put away the first epoch
+            train_losses.append(train_loss)
 
         # --- Validation Phase ---
         model.eval() # Puts the model in "evaluation" mode
         val_loss = 0.0
+        # n = 0
         
         with torch.no_grad(): # Disables gradient calculation (saves computation)
             for x_batch, y_batch in val_loader:
@@ -86,12 +92,17 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
                 pred = model(x_batch)
                 # 2. Calculate the error (Loss)
                 loss = criterion(pred, y_batch)
+                # print(f"Validation Loss {loss.item()}")
                 val_loss += loss.item()
+                # n += 1
                 
+        # print(f"Validation Loss antes de dividir {val_loss}")
         val_loss /= len(val_loader)
-        val_losses.append(val_loss)
+        if epoch > 0:   # Put away the first epoch
+            val_losses.append(val_loss)
 
         # Print progress
         print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Validation Loss: {val_loss:.6f}")
+        # print(n, m)
 
     return train_losses, val_losses
