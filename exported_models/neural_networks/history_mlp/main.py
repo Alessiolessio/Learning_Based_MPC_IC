@@ -6,120 +6,164 @@ main.py
 
 Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
 
-Script principal que chama os módulos para treinar a rede.
-*** MODIFICADO para Lógica Sequencial ***
+Main script to orchestrate the MLP model training using YAML configuration.
+...
 """
 
-import argparse
 import os
 import torch
+import yaml
+from datetime import datetime  # Opcional: para logs
 
-# Importa as funções/classes dos outros arquivos
-# --- MUDANÇA: Nomes dos arquivos atualizados ---
+# Import from our local modules
 from mlp_model import MLPDynamicsModel
-from data_preparation import load_and_prep_episodes # <-- MUDANÇA
-from training_runner import train_model     # <-- MUDANÇA
-from plotting import plot_losses
+from data_preparation import prepare_data
+from training_runner import train_model
+from plotting import plot_losses, plot_component_l1
+from randomizer import generate_and_save_random_yaml
 
-def main(args):
+
+def main(config):
     """
-    Função principal que orquestra o processo.
+    Main function that orchestrates the entire process based on a config dictionary.
     """
-    
-    # --- 0. Directory Setup ---
-    save_dir = os.path.dirname(args.model_path)
+
+    # Extrai os sub-dicionários para facilitar o acesso
+    paths_config = config['paths']
+    train_config = config['training_params']
+    model_config = config['model_params']
+
+    # --- 0. Directory Setup (parametrizado) ---
+    lr_token = str(train_config['learning_rate']).replace('0.', '')
+    hl_token = "_".join(str(h) for h in model_config['hidden_layers'])
+    vs_token = int(round(train_config['val_split'] * 100))
+    hist_token = train_config.get('history_length', 1) 
+
+    # Adiciona p_dropout ao nome do diretório
+    p_drop_token = model_config.get('p_dropout', 0.0)
+    drop_str = f"_drop_{str(p_drop_token).replace('0.', '')}" if p_drop_token > 0 else ""
+
+    run_dir_name = (
+        f"model"
+        f"_hist_{hist_token}" 
+        f"_epoch_{train_config['epochs']}"
+        f"_batch_{train_config['batch_size']}"
+        f"_lr_{lr_token}"
+        f"_vs_{vs_token}"
+        f"_hl_{hl_token}"
+        f"{drop_str}"
+    )
+
+    # Usa o 'base_save_dir' do YAML
+    save_dir = os.path.join(paths_config['base_save_dir'], run_dir_name)
     os.makedirs(save_dir, exist_ok=True)
+
+    # Define o caminho de salvamento do modelo
+    model_save_path = os.path.join(save_dir, "mlp_dynamics.pth")
+
     print(f"All artifacts (model, scalers, plots) will be saved in: {save_dir}")
 
+    # Salva uma cópia do config.yaml no diretório do run para rastreabilidade
+    with open(os.path.join(save_dir, 'config_snapshot.yaml'), 'w') as f:
+        yaml.dump(config, f, default_flow_style=False)
+
     # --- 1. Data Preparation ---
-    print("\n--- 1. Preparing Data (Modo Sequencial) ---")
+    print("\n--- 1. Preparing Data ---")
     
-    # Chama a nova função 'load_and_prep_episodes'
-    train_episodes, val_episodes, _, _ = load_and_prep_episodes(
-        args.csv_path, 
-        scalers_dir=save_dir,
-        val_split_ratio=args.val_split,
-        normalize_data=True # Mantém a normalização
+    history_length = train_config.get('history_length', 1)
+
+    train_data, val_data, _, _, input_dim, output_dim = prepare_data(
+        csv_path=paths_config['csv_path'],
+        scalers_dir=save_dir,        # scalers vão para a pasta parametrizada
+        val_split_ratio=train_config['val_split'],
+        normalize_data=True,
+        history_length=history_length # Passa o parâmetro
     )
-    
-    if train_episodes is None:
+
+    if train_data is None:
         print("Data preparation failed. Aborting.")
         return
-        
-    print(f"Data ready (dividido por episódio).")
+
+    print(f"Data ready (already split by data_preparation).")
 
     # --- 2. Model Initialization ---
     print("\n--- 2. Initializing Model ---")
     
-    # --- MUDANÇA: Input dim agora é (features * seq_len) ---
-    input_features = 5 # (x, y, yaw, v, w)
-    output_dim = 3     # (x_next, y_next, yaw_next)
-    input_dim_seq = input_features * args.sequence_length # ex: 5 * 3 = 15
-    
+    # Passando p_dropout para o construtor do modelo
     model = MLPDynamicsModel(
-        input_dim=input_dim_seq, # <-- MUDANÇA
+        input_dim=input_dim,
         output_dim=output_dim,
-        hidden_layers=args.hidden_layers
+        hidden_layers=model_config['hidden_layers'],
+        p_dropout=model_config.get('p_dropout', 0.0) 
     )
-    
-    print(f"Model created with architecture: Input({input_dim_seq}) -> {args.hidden_layers} -> Output({output_dim})")
+
+    print(f"Model created with architecture: Input({input_dim}) -> {model_config['hidden_layers']} -> Output({output_dim})")
+    if model_config.get('p_dropout', 0.0) > 0:
+        print(f"Using Dropout with p={model_config.get('p_dropout', 0.0)}")
     print(model)
 
     # --- 3. Running the Training ---
     print("\n--- 3. Starting Training ---")
-    
-    # Chama o NOVO 'train_model' de 'training_runner.py'
-    train_losses, val_losses = train_model(
+    train_losses, val_losses, train_l1_per_comp, val_l1_per_comp = train_model(
         model=model,
-        train_episodes=train_episodes, # <-- MUDANÇA (passa lista de episódios)
-        val_episodes=val_episodes,     # <-- MUDANÇA (passa lista de episódios)
-        epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        batch_size=args.batch_size,
-        seq_len=args.sequence_length   # <-- MUDANÇA (novo parâmetro)
+        train_data=train_data,
+        val_data=val_data,
+        epochs=train_config['epochs'],
+        learning_rate=train_config['learning_rate'],
+        batch_size=train_config['batch_size']
     )
     print("Training complete.")
 
     # --- 4. Saving Artifacts ---
     print("\n--- 4. Saving Artifacts ---")
-    # (Salva o modelo final. A lógica de 'melhor' modelo pode ser
-    #  readicionada ao training_runner.py se necessário)
-    torch.save(model.state_dict(), args.model_path)
-    print(f"Model saved to {args.model_path}")
-    
+    torch.save(model.state_dict(), model_save_path)
+    print(f"Model saved to {model_save_path}")
+
     plot_losses(train_losses, val_losses, save_dir=save_dir)
+    plot_component_l1(train_l1_per_comp, val_l1_per_comp, save_dir=save_dir)
 
     print("\nProcess finished successfully.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Trains an MLP model to predict robot dynamics.")
-    
-    # --- Path Parameters ---
-    parser.add_argument("--csv_path", type=str, 
-                        default="/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv",
-                        help="Path to the dataset.csv file.")
-    parser.add_argument("--model_path", type=str, 
-                        default="trained_models/mlp_dynamics.pth",
-                        help="Path to save the trained model (.pth).")
+    config_path = 'parameters.yaml'
+    run_idx = 1
+    stop = 0
 
-    # --- Training Parameters ---
-    parser.add_argument("--epochs", type=int, default=100,
-                        help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=16, # <-- MUDANÇA (batch de episódios, menor)
-                        help="Number of EPISODES per optimizer step (batch size).")
-    parser.add_argument("--learning_rate", type=float, default=1e-4,
-                        help="Learning rate for the Adam optimizer.")
-    parser.add_argument("--val_split", type=float, default=0.2,
-                        help="Fraction of the dataset to use for validation (e.g., 0.2 for 20%).")
+    try:
+        while stop == 0:
+            print("\n" + "=" * 80)
+            print(f"[{datetime.now().isoformat(sep=' ', timespec='seconds')}] Starting run #{run_idx}")
+            print("=" * 80)
 
-    # --- Model Architecture Parameters ---
-    # --- MUDANÇA: Adicionado 'sequence_length' ---
-    parser.add_argument("--sequence_length", type=int, default=3,
-                        help="Number of past steps to use as input (ex: 3).")
-    parser.add_argument("--hidden_layers", type=int, nargs='+', default=[64, 64],
-                        help="Sizes of the hidden layers. Ex: --hidden_layers 64 64 128")
-    
-    args = parser.parse_args()
-    
-    main(args)
+            # 1) Randomiza e salva novo YAML
+            try:
+                generate_and_save_random_yaml(config_path)
+                print(f"Random config generated and saved to {config_path}")
+            except Exception as e:
+                print(f"ERRO ao gerar random config: {e}")
+                # Continua para tentar a próxima iteração
+                run_idx += 1
+                continue
+
+            # 2) Lê o YAML e roda o pipeline completo
+            try:
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+
+                print(f"Configuration loaded successfully from {config_path}")
+                main(config)
+
+            except FileNotFoundError:
+                print(f"ERRO: Arquivo de configuração não encontrado em {config_path}")
+            except yaml.YAMLError as e:
+                print(f"ERRO: Falha ao parsear o arquivo YAML: {e}")
+            except Exception as e:
+                print(f"Ocorreu um erro inesperado durante a execução do run #{run_idx}: {e}")
+
+            print(f"Run #{run_idx} finished.")
+            run_idx += 1
+            stop = 1
+
+    except KeyboardInterrupt:
+        print("\nInterrompido pelo usuário. Encerrando loop com segurança.")

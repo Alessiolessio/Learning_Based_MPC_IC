@@ -123,9 +123,9 @@ def main():
 
     # ---- [ADD] Config do CSV (igual ao dataset anterior) ----
     DT = 0.02
-    CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs"
+    CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/datasets"
     os.makedirs(CSV_DIR, exist_ok=True)
-    CSV_PATH = os.path.join(CSV_DIR, "dataset_random.csv")
+    CSV_PATH = os.path.join(CSV_DIR, "dataset_random_test.csv")
     CSV_COLUMNS = ["env", "episode", "step", "timestamp",
                    "vx", "vy", "wz", "x", "y",
                    "qw", "qx", "qy", "qz", "yaw", "v", "w"]
@@ -138,7 +138,7 @@ def main():
     # --- parâmetros da simulação aleatória ---
     V_MIN, V_MAX = 0.0, 2.0
     W_MIN, W_MAX = -2.0, 2.0
-    HOLD_STEPS = 50
+    HOLD_STEPS = 100
     DELAY_STEPS = 50
     LOG_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/random_trajectories"
 

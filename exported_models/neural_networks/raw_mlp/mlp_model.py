@@ -4,7 +4,7 @@
 """
 mlp_model.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
 
 Defines the MLP (Multilayer Perceptron) model architecture.
 The architecture (number of neurons and layers) is parameterizable.
@@ -19,7 +19,8 @@ class MLPDynamicsModel(nn.Module):
     'nn.Module' is the PyTorch base class for all models.
     """
     
-    def __init__(self, input_dim, output_dim, hidden_layers=[64, 64]):
+    # <--- MUDANÇA: Adicionado p_dropout=0.0 como argumento
+    def __init__(self, input_dim, output_dim, hidden_layers=[64, 64], p_dropout: float = 0.0):
         """
         Class constructor. Defines the network layers.
         
@@ -28,6 +29,7 @@ class MLPDynamicsModel(nn.Module):
         - hidden_layers: A list of integers defining the size of each
                          hidden layer. Ex: [64, 64] for two
                          hidden layers of 64 neurons each.
+        - p_dropout: Probabilidade de dropout (ex: 0.1). 0.0 desativa.
         """
         super(MLPDynamicsModel, self).__init__()
         
@@ -41,11 +43,17 @@ class MLPDynamicsModel(nn.Module):
             # Input layer to the first hidden layer
             layers.append(nn.Linear(input_dim, hidden_layers[0]))
             layers.append(nn.ReLU())
+            # <--- MUDANÇA: Adicionada camada de Dropout
+            if p_dropout > 0:
+                layers.append(nn.Dropout(p=p_dropout))
             
             # Intermediate hidden layers
             for i in range(len(hidden_layers) - 1):
                 layers.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
                 layers.append(nn.ReLU())
+                # <--- MUDANÇA: Adicionada camada de Dropout
+                if p_dropout > 0:
+                    layers.append(nn.Dropout(p=p_dropout))
             
             # Last hidden layer to the output layer
             layers.append(nn.Linear(hidden_layers[-1], output_dim))

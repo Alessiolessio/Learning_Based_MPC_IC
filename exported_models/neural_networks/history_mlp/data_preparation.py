@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-data_utils.py
-(Substitui data_preparation.py)
+data_preparation.py
 
-Funções para carregar e processar o dataset.
-Lê o CSV, normaliza e cria listas de episódios de treino e validação.
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
+
+Functions to read the .csv dataset, process it, normalize,
+save the scalers (StandardScaler), and split into train/validation.
 """
 
 import pandas as pd
@@ -15,111 +16,149 @@ import os
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import joblib
-from sklearn.model_selection import train_test_split
+from torch.utils.data import TensorDataset, random_split
 
-def load_and_prep_episodes(csv_path, scalers_dir, val_split_ratio=0.2, normalize_data=True):
+# <--- MUDANÇA 1: Adicionado 'history_length=1' (default 1 para manter compatibilidade)
+def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2, normalize_data=True, history_length=1):
     """
-    Lê o dataset, separa em treino/validação POR EPISÓDIO,
-    normaliza os dados e retorna listas de episódios processados.
+    Reads the dataset.csv, transforms, (optionally) normalizes, 
+    and SPLITS it into train/validation.
     
-    Retorna:
-    - train_episodes (list): Lista de tuplas (inputs_tensor, targets_tensor)
-    - val_episodes (list): Lista de tuplas (inputs_tensor, targets_tensor)
-    - input_scaler: O scaler treinado
-    - target_scaler: O scaler treinado
+    Saves the 'scaler' objects for future use if normalization is enabled.
+    
+    Args:
+        csv_path (str): Path to the CSV file.
+        scalers_dir (str): Directory to save the scaler .joblib files.
+        val_split_ratio (float): Proportion of the dataset to use for validation (e.g., 0.2).
+        normalize_data (bool): If True, applies StandardScaler. If False, uses raw data.
+        history_length (int): Number of time steps to use as input sequence (e.g., 3).
+        
+    Returns:
+        tuple: (train_data, val_data, input_scaler, target_scaler, input_dim, output_dim)
+               (Scalers will be None if normalize_data is False)
+               On failure, returns (None, None, None, None, None, None)
     """
-    print(f"Lendo e processando o dataset: {csv_path}")
+    print(f"Reading and processing the dataset: {csv_path}")
     try:
         df = pd.read_csv(csv_path)
     except FileNotFoundError:
-        print(f"Erro: Arquivo CSV não encontrado em {csv_path}")
-        return None, None, None, None
+        print(f"Error: CSV file not found at {csv_path}")
+        # <--- MUDANÇA 3a: Atualiza retorno de falha
+        return None, None, None, None, None, None
 
     input_cols = ['x', 'y', 'yaw', 'v', 'w']
     target_cols = ['x', 'y', 'yaw']
-    
-    # Dicionários para guardar os dados brutos (Numpy)
-    all_episode_inputs = {}
-    all_episode_targets = {}
-    
-    episode_ids = df['episode'].unique()
-    print(f"Processando {len(episode_ids)} episódios...")
 
-    for episode_id in episode_ids:
-        df_ep = df[df['episode'] == episode_id].sort_values('step')
+    all_inputs = []
+    all_targets = []
+
+    # <--- MUDANÇA 2: Lógica de processamento de episódio reescrita ---
+    print(f"Processing {len(df['episode'].unique())} episodes with history_length={history_length}...")
+    for episode_id in df['episode'].unique():
+        df_episode = df[df['episode'] == episode_id].sort_values('step')
         
-        # Pega todos os inputs (x, y, yaw, v, w) do episódio
-        inputs_np = df_ep[input_cols].values
+        # Pega os dataframes de input (estado+ação) e target (estado)
+        state_action_df = df_episode[input_cols]
+        target_state_df = df_episode[target_cols]
+
+        dfs_to_concat = []
+        input_feature_cols = []
+
+        # 1. Constrói colunas de input histórico (t, t+1, ... t+history_length-1)
+        for i in range(history_length):
+            shifted_inputs = state_action_df.shift(-i)
+            # Renomeia colunas para ex: 'x_h0', 'y_h0', ... 'x_h1', 'y_h1', ...
+            current_cols = [f"{col}_h{i}" for col in input_cols]
+            shifted_inputs.columns = current_cols
+            
+            dfs_to_concat.append(shifted_inputs)
+            input_feature_cols.extend(current_cols)
+
+        # 2. Constrói coluna do target (estado em t + history_length)
+        target_df = target_state_df.shift(-history_length).add_suffix('_next')
+        target_feature_cols = [col + '_next' for col in target_cols]
         
-        # Pega todos os targets (x, y, yaw) do episódio
-        targets_np = df_ep[target_cols].values
-        
-        # Para a lógica (x1,x2,x3) -> y4, precisamos de pelo menos 4 steps
-        if len(inputs_np) > 3: 
-            all_episode_inputs[episode_id] = inputs_np
-            all_episode_targets[episode_id] = targets_np
+        dfs_to_concat.append(target_df)
 
-    if not all_episode_inputs:
-        print("Erro: Nenhum episódio com dados suficientes foi encontrado.")
-        return None, None, None, None
+        # 3. Combina tudo e remove NaNs (linhas no fim do episódio que não formam uma sequência completa)
+        combined = pd.concat(dfs_to_concat, axis=1)
+        combined = combined.dropna()
 
-    print(f"Dados válidos de {len(all_episode_inputs)} episódios carregados.")
+        if not combined.empty:
+            all_inputs.append(combined[input_feature_cols])
+            all_targets.append(combined[target_feature_cols])
+    # <--- FIM DA MUDANÇA 2 ---
 
-    # --- Divisão Treino/Validação (baseado nos IDs dos episódios) ---
-    print(f"Separando episódios: {1-val_split_ratio:.0%} Treino, {val_split_ratio:.0%} Validação")
-    train_ids, val_ids = train_test_split(list(all_episode_inputs.keys()), test_size=val_split_ratio, shuffle=True)
+    if not all_inputs:
+        print("Error: No valid data was generated. Check the CSV or history_length.")
+        # <--- MUDANÇA 3b: Atualiza retorno de falha
+        return None, None, None, None, None, None
 
-    # Concatena todos os steps APENAS dos episódios de TREINO para o scaler
-    train_inputs_full = np.concatenate([all_episode_inputs[ep_id] for ep_id in train_ids], axis=0)
-    train_targets_full = np.concatenate([all_episode_targets[ep_id] for ep_id in train_ids], axis=0)
+    final_inputs_df = pd.concat(all_inputs)
+    final_targets_df = pd.concat(all_targets)
 
-    # --- Normalização ---
-    input_scaler = None
-    target_scaler = None
-    
+    # <--- Bloco de normalização (sem mudanças) ---
     if normalize_data:
-        print("Normalizando dados (StandardScaler)...")
+        print("Normalizing data (StandardScaler)...")
         input_scaler = StandardScaler()
         target_scaler = StandardScaler()
         
-        # Fit (treina) o scaler APENAS nos dados de TREINO
-        input_scaler.fit(train_inputs_full)
-        target_scaler.fit(train_targets_full)
+        input_scaler.fit(final_inputs_df)
+        target_scaler.fit(final_targets_df)
+        
+        # Usa os dados normalizados
+        inputs_to_tensor = input_scaler.transform(final_inputs_df)
+        targets_to_tensor = target_scaler.transform(final_targets_df)
         
         os.makedirs(scalers_dir, exist_ok=True)
         joblib.dump(input_scaler, os.path.join(scalers_dir, 'input_scaler.joblib'))
         joblib.dump(target_scaler, os.path.join(scalers_dir, 'target_scaler.joblib'))
-        print(f"Scalers salvos em: {scalers_dir}")
-    else:
-        print("Normalization skipped.")
-
-    # --- Processa e Normaliza as listas de episódios ---
-    train_episodes = []
-    for ep_id in train_ids:
-        inputs_raw = all_episode_inputs[ep_id]
-        targets_raw = all_episode_targets[ep_id]
-        if normalize_data:
-            inputs_scaled = input_scaler.transform(inputs_raw)
-            targets_scaled = target_scaler.transform(targets_raw)
-            train_episodes.append((torch.tensor(inputs_scaled, dtype=torch.float32), 
-                                   torch.tensor(targets_scaled, dtype=torch.float32)))
-        else:
-            train_episodes.append((torch.tensor(inputs_raw, dtype=torch.float32), 
-                                   torch.tensor(targets_raw, dtype=torch.float32)))
-
-    val_episodes = []
-    for ep_id in val_ids:
-        inputs_raw = all_episode_inputs[ep_id]
-        targets_raw = all_episode_targets[ep_id]
-        if normalize_data:
-            inputs_scaled = input_scaler.transform(inputs_raw)
-            targets_scaled = target_scaler.transform(targets_raw)
-            val_episodes.append((torch.tensor(inputs_scaled, dtype=torch.float32), 
-                                 torch.tensor(targets_scaled, dtype=torch.float32)))
-        else:
-            val_episodes.append((torch.tensor(inputs_raw, dtype=torch.float32), 
-                                 torch.tensor(targets_raw, dtype=torch.float32)))
-
-    print(f"Listas de episódios criadas: {len(train_episodes)} treino, {len(val_episodes)} validação.")
+        print(f"Scalers saved to: {scalers_dir}")
     
-    return train_episodes, val_episodes, input_scaler, target_scaler
+    else:
+        print("Normalization skipped. Using raw data.")
+        # Define scalers como None para consistência no retorno
+        input_scaler = None
+        target_scaler = None
+        
+        # Usa os dados brutos (convertidos para numpy array)
+        inputs_to_tensor = final_inputs_df.values
+        targets_to_tensor = final_targets_df.values
+    # <--- FIM DA MUDANÇA ---
+
+    # Converte os dados (normalizados ou brutos) para Tensores
+    inputs_tensor = torch.tensor(inputs_to_tensor, dtype=torch.float32)
+    targets_tensor = torch.tensor(targets_to_tensor, dtype=torch.float32)
+
+    print(f"Processing complete. Total of {len(inputs_tensor)} samples generated.")
+    # <--- MUDANÇA 3c: Captura as dimensões dinamicamente
+    input_dim = inputs_tensor.shape[1]
+    output_dim = targets_tensor.shape[1]
+    print(f"Detected dimensions: Input={input_dim}, Output={output_dim}")
+
+
+    # --- Train/Validation Split ---
+    print(f"Splitting the dataset (validation ratio: {val_split_ratio})...")
+    
+    # 1. Create the TensorDataset
+    dataset = TensorDataset(inputs_tensor, targets_tensor)
+
+    # 2. Perform the split
+    if csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv":
+        SEED = 50   # SEED for dataset_random split
+    elif csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc.csv":
+        SEED = 50   # SEED for dataset_nmpc split
+    elif csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc_better.csv":
+        SEED = 51   # SEED for dataset_nmpc_better split
+    else:
+        SEED = 50   # SEED for other dataset split
+    generator = torch.Generator()
+    generator.manual_seed(SEED)
+    val_len = int(val_split_ratio * len(dataset))
+    train_len = len(dataset) - val_len
+    train_data, val_data = random_split(dataset, [train_len, val_len], generator=generator)
+    
+    print(f"Split complete: {train_len} train samples, {val_len} validation samples.")
+
+    # <--- MUDANÇA 3d: Adiciona dims ao retorno
+    return train_data, val_data, input_scaler, target_scaler, input_dim, output_dim

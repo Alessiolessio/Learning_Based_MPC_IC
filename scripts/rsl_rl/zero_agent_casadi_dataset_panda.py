@@ -631,9 +631,9 @@ def main():
 
     # CSV simples
     DT = 0.02
-    CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs"
+    CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets"
     os.makedirs(CSV_DIR, exist_ok=True)
-    CSV_PATH = os.path.join(CSV_DIR, "dataset.csv")
+    CSV_PATH = os.path.join(CSV_DIR, "dataset_nmpc_test.csv")
     CSV_COLUMNS = ["env", "episode", "step", "timestamp", "vx", "vy", "wz", "x", "y", "qw", "qx", "qy", "qz", "yaw", "v", "w"]
     if not os.path.exists(CSV_PATH):
         pd.DataFrame([], columns=CSV_COLUMNS).to_csv(CSV_PATH, index=False)
@@ -663,16 +663,16 @@ def main():
     current_linear_pos = torch.zeros((num_envs, 3), device=device)
     delay_steps = 50  # number of steps to wait before moving
     histories = [{"pos_x": [], "pos_y": [], "theta": [], "vel_x": [], "vel_y": [], "omega": [], "waypoints": []} for _ in range(num_envs)]
-    LOG_DIR = "/home/nexus/VQ_PMC/logs"     # directory for saving the plots
+    LOG_DIR = "/home/nexus/VQ_PMC/logs/nmpc_trajectories"     # directory for saving the plots
     step_counter = 0    # number of steps of the simulation
     obs = None          # for completeness, we initialize the observations
 
     # Waypoint generator parameters
     R_MIN = 1  # minimum distance (m)
     R_MAX = 2    # maximum distance (m)
-    THETA_MIN = -(np.pi*7) / 18   # -70 degrees
-    THETA_MAX = (np.pi*7) / 18   # +70 degrees
-    WAYPOINT_TOLERANCE = 0.1  # tolerance to consider waypoint reached (m)
+    THETA_MIN = -(np.pi) / 3   # -60 degrees -70 before
+    THETA_MAX = (np.pi) / 3   # +60 degrees 70 before
+    WAYPOINT_TOLERANCE = 0.2  # tolerance to consider waypoint reached (m)
 
     # generate initial target positions for all envs
     target_position_np = np.zeros((num_envs, 3))

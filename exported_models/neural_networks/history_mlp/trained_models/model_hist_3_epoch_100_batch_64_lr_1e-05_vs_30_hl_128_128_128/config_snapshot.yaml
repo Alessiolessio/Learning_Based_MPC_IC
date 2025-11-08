@@ -1,0 +1,15 @@
+model_params:
+  hidden_layers:
+  - 128
+  - 128
+  - 128
+  p_dropout: 0.0
+paths:
+  base_save_dir: trained_models
+  csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc.csv
+training_params:
+  batch_size: 64
+  epochs: 100
+  history_length: 3
+  learning_rate: 1.0e-05
+  val_split: 0.3

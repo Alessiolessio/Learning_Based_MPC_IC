@@ -4,7 +4,7 @@
 """
 data_preparation.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp
+Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
 
 Functions to read the .csv dataset, process it, normalize,
 save the scalers (StandardScaler), and split into train/validation.
@@ -111,9 +111,19 @@ def prepare_data(csv_path, scalers_dir="trained_models", val_split_ratio=0.2, no
     dataset = TensorDataset(inputs_tensor, targets_tensor)
 
     # 2. Perform the split
+    if csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv":
+        SEED = 50   # SEED for dataset_random split
+    elif csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc.csv":
+        SEED = 50   # SEED for dataset_nmpc split
+    elif csv_path == "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc_better.csv":
+        SEED = 51   # SEED for dataset_nmpc_better split
+    else:
+        SEED = 50   # SEED for other dataset split
+    generator = torch.Generator()
+    generator.manual_seed(SEED)
     val_len = int(val_split_ratio * len(dataset))
     train_len = len(dataset) - val_len
-    train_data, val_data = random_split(dataset, [train_len, val_len])
+    train_data, val_data = random_split(dataset, [train_len, val_len], generator=generator)
     
     print(f"Split complete: {train_len} train samples, {val_len} validation samples.")
 
