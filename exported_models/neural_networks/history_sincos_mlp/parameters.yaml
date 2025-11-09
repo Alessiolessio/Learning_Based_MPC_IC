@@ -1,3 +1,6 @@
+# parameters.yaml
+# Global configuration for training the MLP dynamics model.
+
 paths:
   # Path to the dataset CSV used for training/validation
   csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc.csv
@@ -6,12 +9,12 @@ paths:
 
 training_params:
   # Number of training epochs
-  epochs: 500
+  epochs: 300
   # Batch size for DataLoader
   batch_size: 64
   # Learning rate for Adam
   learning_rate: 1.0e-05
-  # Validation split ratio (random split, not episode-based)
+  # Validation split ratio (episode-based split)
   val_split: 0.3
   # Number of history steps in the input window
   history_length: 3
@@ -24,4 +27,4 @@ model_params:
     - 256
     - 256
   # Dropout probability (0.0 disables Dropout)
-  p_dropout: 0.0
+  p_dropout: 0.3

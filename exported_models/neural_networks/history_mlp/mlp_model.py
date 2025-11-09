@@ -4,65 +4,52 @@
 """
 mlp_model.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
-
-Defines the MLP (Multilayer Perceptron) model architecture.
-The architecture (number of neurons and layers) is parameterizable.
+Defines a configurable MLP (Multilayer Perceptron) used for
+learning dynamics from history windows of state-action inputs.
 """
 
 import torch
 import torch.nn as nn
 
+
 class MLPDynamicsModel(nn.Module):
-    """
-    Defines the architecture of our Neural Network (MLP).
-    'nn.Module' is the PyTorch base class for all models.
-    """
-    
+    """Simple configurable MLP for f(history_state_action) -> next_state."""
+
     def __init__(self, input_dim, output_dim, hidden_layers=[64, 64], p_dropout: float = 0.0):
         """
-        Class constructor. Defines the network layers.
-        
-        - input_dim: Input dimension (e.g., 5, or 15 if history_length=3)
-        - output_dim: Output dimension (e.g., 3)
-        - hidden_layers: A list of integers defining the size of each
-                         hidden layer. Ex: [64, 64] for two
-                         hidden layers of 64 neurons each.
-        - p_dropout: Probabilidade de dropout (ex: 0.1). 0.0 desativa.
+        Args:
+            input_dim (int): Number of input features.
+            output_dim (int): Number of output features.
+            hidden_layers (List[int]): Hidden layer sizes, e.g., [128, 128, 128].
+            p_dropout (float): Dropout probability (0.0 = disabled).
         """
         super(MLPDynamicsModel, self).__init__()
-        
+
         layers = []
-        
-        # Input layer
+
+        # -- If no hidden layers, connect input directly to output --
         if not hidden_layers:
-            # Simple case: direct from input to output
             layers.append(nn.Linear(input_dim, output_dim))
         else:
-            # Input layer to the first hidden layer
+            # -- Input -> first hidden --
             layers.append(nn.Linear(input_dim, hidden_layers[0]))
             layers.append(nn.ReLU())
-            # Adicionada camada de Dropout
             if p_dropout > 0:
                 layers.append(nn.Dropout(p=p_dropout))
-            
-            # Intermediate hidden layers
+
+            # -- Optional intermediate hiddens --
             for i in range(len(hidden_layers) - 1):
-                layers.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
+                layers.append(nn.Linear(hidden_layers[i], hidden_layers[i + 1]))
                 layers.append(nn.ReLU())
-                # Adicionada camada de Dropout
                 if p_dropout > 0:
                     layers.append(nn.Dropout(p=p_dropout))
-            
-            # Last hidden layer to the output layer
+
+            # -- Last hidden -> output --
             layers.append(nn.Linear(hidden_layers[-1], output_dim))
 
-        # 'nn.Sequential' is a container that executes layers in order.
-        self.model = nn.Sequential(*layers) # The '*' unpacks the list
+        # Wrap as a sequential model (executes layers in order)
+        self.model = nn.Sequential(*layers)
 
     def forward(self, x):
-        """
-        Defines the "forward pass".
-        It is called automatically when you do model(input).
-        """
+        """Standard forward pass."""
         return self.model(x)

@@ -4,16 +4,15 @@
 """
 plotting.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
-
-Contém funções de plotagem das perdas.
+Simple plotting helpers for (1) loss curves and (2) per-component MAE.
 """
 
-import matplotlib.pyplot as plt
 import os
+import matplotlib.pyplot as plt
 
-def plot_losses(train_losses, val_losses, save_dir="."):
-    """Plota o gráfico de Perda de Treino vs. Validação (MSE)."""
+
+def plot_losses(train_losses, val_losses, save_dir: str = "."):
+    """Plot training vs. validation MSE and save the figure to disk."""
     plt.figure(figsize=(10, 5))
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Validation Loss")
@@ -27,14 +26,14 @@ def plot_losses(train_losses, val_losses, save_dir="."):
     print(f"Loss plot saved to: {save_path}")
     plt.close()
 
-def plot_component_l1(train_l1_per_comp, val_l1_per_comp, save_dir="."):
-    """Plota MAE (L1) por componente (x, y, yaw) para treino e validação."""
-    # Each component as its own line (train+val) in the same figure
+
+def plot_component_l1(train_l1_per_comp, val_l1_per_comp, save_dir: str = "."):
+    """Plot per-component MAE (x, y, yaw) for both train and validation."""
     plt.figure(figsize=(10, 6))
     for name, series in train_l1_per_comp.items():
         plt.plot(series, label=f"Train MAE {name}")
     for name, series in val_l1_per_comp.items():
-        plt.plot(series, linestyle='--', label=f"Val MAE {name}")
+        plt.plot(series, linestyle="--", label=f"Val MAE {name}")
     plt.title("Per-Component MAE (|error|) over Epochs")
     plt.xlabel("Epoch (starting from 2)")
     plt.ylabel("MAE (L1) in normalized units")

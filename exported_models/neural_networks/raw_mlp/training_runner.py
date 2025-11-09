@@ -4,13 +4,8 @@
 """
 training_runner.py
 
-Location: /home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/
-
-Contains the main logic for the training and validation loop.
-Now also computes, **only for visualization**, an L1/MAE per target
-component (x, y, yaw). The optimizer/loss for training remains MSE.
-
---- CORRIGIDO PARA USO DE GPU ---
+Runs the training/validation loop on CPU/GPU (device-aware),
+optimizing MSE while logging per-component MAE (x, y, yaw) for visualization.
 """
 
 import torch
@@ -18,38 +13,42 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+# Names for per-component MAE logging (visual inspection only)
 TARGET_NAMES = ["x", "y", "yaw"]
 
+
 def _init_component_logs():
+    """Create a dict {component_name: []} to accumulate per-epoch MAE."""
     return {name: [] for name in TARGET_NAMES}
 
-def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, device='cuda'):
+
+def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, device="cuda"):
     """
-    Executes the training and validation loop for the given model.
+    Execute the training/validation loop.
 
     Returns:
-        tuple: (train_losses, val_losses, train_l1_per_comp, val_l1_per_comp)
-               where the last two are dicts with per-epoch MAE lists per component.
-    Args:
-        device: 'cuda' for GPU, 'cpu' for CPU training
+        (train_losses, val_losses, train_l1_per_comp, val_l1_per_comp)
     """
-    # Move model to GPU if available
+    # -- Move model to the desired device (GPU/CPU) --
     model = model.to(device)
-    
-    # DataLoaders
+
+    # -- DataLoaders (shuffle only the training set) --
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
 
-    print(f"Starting training with {len(train_data)} train samples and {len(val_data)} validation samples on {device}.")
+    print(
+        f"Starting training with {len(train_data)} train samples and "
+        f"{len(val_data)} validation samples on {device}."
+    )
 
-    # Optimizer / primary loss (unchanged)
+    # -- Optimizer and primary objective (MSE) --
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
 
-    # Histories for main loss
+    # -- Global loss histories --
     train_losses, val_losses = [], []
 
-    # Histories for visualization-only per-component L1 (MAE)
+    # -- Visualization-only MAE histories per component --
     train_l1_per_comp = _init_component_logs()
     val_l1_per_comp = _init_component_logs()
 
@@ -60,81 +59,80 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, 
         model.train()
         train_loss = 0.0
 
-        # Accumulators for MAE per component (sum of abs error, then / N)
-        # <--- MUDANÇA 1: Mover acumulador para o 'device'
+        # Accumulates absolute error sums per component on the device
         comp_sum_abs = torch.zeros(3, device=device)
         n_train = 0
 
         for x_batch, y_batch in train_loader:
-            # Move batch to device (GPU/CPU)
-            x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+            # Move data to device
+            x_batch = x_batch.to(device)
+            y_batch = y_batch.to(device)
+
+            # Forward pass
             pred = model(x_batch)
 
-            # Primary optimization loss (MSE) — unchanged
+            # MSE optimization step
             loss = criterion(pred, y_batch)
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            # Track training loss (sum over batches)
             train_loss += loss.item()
 
-            # --- Secondary metric (visualization only): MAE per component ---
-            # sum over batch, keep component dimension
+            # Accumulate absolute error for per-component MAE
             abs_err = (pred - y_batch).abs()  # shape [B, 3]
             comp_sum_abs += abs_err.sum(dim=0).detach()
             n_train += y_batch.shape[0]
 
+        # Average training MSE over all batches
         train_loss /= len(train_loader)
-        if epoch > 0:
+        if epoch > 0:  # keep alignment with plotting labels
             train_losses.append(train_loss)
 
-        # finalize epoch MAE per component for train
-        if n_train > 0:
-            # <--- MUDANÇA 2: Mover de volta para CPU para '.tolist()'
-            comp_mae_train = (comp_sum_abs / n_train).cpu().tolist()
-        else:
-            comp_mae_train = [float('nan')]*3
+        # Finalize per-component MAE for training
+        comp_mae_train = (comp_sum_abs / max(1, n_train)).detach().cpu().tolist()
         for i, name in enumerate(TARGET_NAMES):
             train_l1_per_comp[name].append(comp_mae_train[i])
 
-        # ------------------- VAL -------------------
+        # ------------------- VALIDATION -------------------
         model.eval()
         val_loss = 0.0
-         # <--- MUDANÇA 3: Mover acumulador para o 'device'
         comp_sum_abs_v = torch.zeros(3, device=device)
         n_val = 0
 
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
-                # <--- MUDANÇA 4: Mover batches de VALIDAÇÃO para o 'device'
-                x_batch, y_batch = x_batch.to(device), y_batch.to(device)
-                
+                # Move data to device
+                x_batch = x_batch.to(device)
+                y_batch = y_batch.to(device)
+
+                # Forward pass and loss
                 pred = model(x_batch)
                 loss = criterion(pred, y_batch)
                 val_loss += loss.item()
 
-                abs_err = (pred - y_batch).abs()  # [B,3]
-                # <--- MUDANÇA 5: Adicionar .detach() (boa prática, embora no_grad)
+                # Accumulate absolute error for MAE
+                abs_err = (pred - y_batch).abs()  # [B, 3]
                 comp_sum_abs_v += abs_err.sum(dim=0).detach()
                 n_val += y_batch.shape[0]
 
+        # Average validation MSE
         val_loss /= len(val_loader)
         if epoch > 0:
             val_losses.append(val_loss)
 
-        if n_val > 0:
-            # <--- MUDANÇA 6: Mover de volta para CPU para '.tolist()'
-            comp_mae_val = (comp_sum_abs_v / n_val).cpu().tolist()
-        else:
-            comp_mae_val = [float('nan')]*3
+        # Finalize per-component MAE for validation
+        comp_mae_val = (comp_sum_abs_v / max(1, n_val)).detach().cpu().tolist()
         for i, name in enumerate(TARGET_NAMES):
             val_l1_per_comp[name].append(comp_mae_val[i])
 
-        # Console print: show both MSE (global) and per-component MAE
-        mae_str_train = ", ".join([f"{k}: {train_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
-        mae_str_val = ", ".join([f"{k}: {val_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
-        print(f"Epoch {epoch+1}/{epochs} | Train MSE: {train_loss:.6f} | Val MSE: {val_loss:.6f} | "
-              f"Train MAE [{mae_str_train}] | Val MAE [{mae_str_val}]")
+        # Pretty console print with both MSE and MAE
+        mae_tr = ", ".join([f"{k}: {train_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
+        mae_vl = ", ".join([f"{k}: {val_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
+        print(
+            f"Epoch {epoch+1}/{epochs} | Train MSE: {train_loss:.6f} | Val MSE: {val_loss:.6f} | "
+            f"Train MAE [{mae_tr}] | Val MAE [{mae_vl}]"
+        )
 
     return train_losses, val_losses, train_l1_per_comp, val_l1_per_comp
