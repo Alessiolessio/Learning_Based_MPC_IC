@@ -22,7 +22,7 @@ def _init_component_logs():
     return {name: [] for name in TARGET_NAMES}
 
 
-def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
+def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, device):
     """
     Executes the training/validation loop.
 
@@ -30,8 +30,9 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
         (train_losses, val_losses, train_l1_per_comp, val_l1_per_comp)
     """
     # -- DataLoaders (shuffle only train) --
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+    pin_mem = device.type == "cuda"
+    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, pin_memory=pin_mem)
+    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False, pin_memory=pin_mem)
 
     print(f"Starting training with {len(train_data)} train samples and {len(val_data)} validation samples.")
 
@@ -54,10 +55,13 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
         train_loss = 0.0
 
         # Accumulators for MAE per component (sum over batch, then / N)
-        comp_sum_abs = torch.zeros(3)
+        comp_sum_abs = torch.zeros(3, device=device)
         n_train = 0
 
         for x_batch, y_batch in train_loader:
+            x_batch = x_batch.to(device, non_blocking=pin_mem)
+            y_batch = y_batch.to(device, non_blocking=pin_mem)
+
             # Forward pass
             pred = model(x_batch)
 
@@ -90,11 +94,14 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size):
         # ------------------- VAL -------------------
         model.eval()
         val_loss = 0.0
-        comp_sum_abs_v = torch.zeros(3)
+        comp_sum_abs_v = torch.zeros(3, device=device)
         n_val = 0
 
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
+                x_batch = x_batch.to(device, non_blocking=pin_mem)
+                y_batch = y_batch.to(device, non_blocking=pin_mem)
+
                 pred = model(x_batch)
                 loss = criterion(pred, y_batch)
                 val_loss += loss.item()

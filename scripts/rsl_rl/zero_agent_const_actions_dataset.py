@@ -34,11 +34,11 @@ from isaaclab.utils import math as ilmath
 # ============================= USER CONFIG =============================
 # Fase 2 (ações finais):
 V_CONST = 0.0    # m/s
-W_CONST = 2.0    # rad/s
+W_CONST = -2.0    # rad/s
 
 # Fase 1 (aplicada primeiro, por um tempo):
 PHASE1_V = 0.0   # m/s
-PHASE1_W = 2.0   # rad/s
+PHASE1_W = -2.0   # rad/s
 PHASE1_STEPS = 300  # nº de steps
 
 # Delay inicial (mundo estabilizar)
@@ -46,8 +46,8 @@ DELAY_STEPS = 100
 
 # Logging CSV
 DT = 0.02
-CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs"
-CSV_PATH = os.path.join(CSV_DIR, "dataset_const.csv")
+CSV_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets"
+CSV_PATH = os.path.join(CSV_DIR, "dataset_const_w_2pi.csv")
 CSV_COLUMNS = ["env", "episode", "step", "timestamp",
                "vx", "vy", "wz", "x", "y",
                "qw", "qx", "qy", "qz",

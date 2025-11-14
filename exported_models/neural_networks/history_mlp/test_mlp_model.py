@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 from mlp_model import MLPDynamicsModel  # ensure same architecture as training
 
 # ---------------------- USER-CONFIGURABLE PATHS ----------------------
-MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/history_mlp/trained_models/model_hist_3_epoch_500_batch_64_lr_1e-05_vs_30_hl_256_256_256_256"
+MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/history_mlp/trained_models/model_hist_5_epoch_200_batch_64_lr_1e-05_vs_30_hl_256_256_256_256_256_256"
 CSV_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc_test.csv"
 DT = 0.02  # integration step for unicycle baseline (seconds)
 # ---------------------------------------------------------------------

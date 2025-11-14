@@ -71,6 +71,10 @@ def main(config: dict):
         return
     print("Data ready.")
 
+    # ---------------------------- Device -------------------------------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     # ------------------------------ Model -------------------------------
     print("\n--- 2. Initializing Model ---")
     model = MLPDynamicsModel(
@@ -78,7 +82,7 @@ def main(config: dict):
         output_dim=output_dim,
         hidden_layers=model_config["hidden_layers"],
         p_dropout=p_drop
-    )
+    ).to(device)
     print(f"Model: Input({input_dim}) -> {model_config['hidden_layers']} -> Output({output_dim}) (dropout={p_drop})")
     print(model)
 
@@ -90,7 +94,8 @@ def main(config: dict):
         val_data=val_data,
         epochs=train_config["epochs"],
         learning_rate=train_config["learning_rate"],
-        batch_size=train_config["batch_size"]
+        batch_size=train_config["batch_size"],
+        device=device
     )
     print("Training complete.")
 
