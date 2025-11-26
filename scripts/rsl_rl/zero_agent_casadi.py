@@ -709,7 +709,7 @@ def main():
             current_t = step_timer.time_elapsed
             dt_wall = current_t - last_t
             last_t = current_t
-            print(f"[DT] step={step_counter}  dt_wall≈{dt_wall:.6f} s")
+            # print(f"[DT] step={step_counter}  dt_wall≈{dt_wall:.6f} s")
 
             # Observations
             if obs is not None:
