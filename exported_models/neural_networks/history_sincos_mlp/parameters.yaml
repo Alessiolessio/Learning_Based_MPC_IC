@@ -9,7 +9,7 @@ paths:
 
 training_params:
   # Number of training epochs
-  epochs: 250
+  epochs: 1000
   # Batch size for DataLoader
   batch_size: 64
   # Learning rate for Adam
@@ -22,9 +22,10 @@ training_params:
 model_params:
   # Hidden layer sizes
   hidden_layers:
-    - 256
-    - 256
-    - 256
-    - 256
+    - 512
+    - 512
+    - 512
+    - 512
+    - 512
   # Dropout probability (0.0 disables Dropout)
   p_dropout: 0.0

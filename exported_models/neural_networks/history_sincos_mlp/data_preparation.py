@@ -163,25 +163,252 @@ def prepare_data(
         return None, None, None, None, None, None
 
     # ------------------------ Scaling (fit on full dataset, as before) ------------------------
+    # NOTE: We only normalize x, y, v, w columns with StandardScaler.
+    #       sin/cos columns remain as raw values (already in [-1, 1] range).
     if normalize_data:
-        print("Normalizing data with StandardScaler (fit on all data: train+val)...")
+        print("Normalizing data with StandardScaler (ONLY for x, y, v, w columns)...")
+        print("sin/cos columns will NOT be normalized (kept as raw values).")
+        
         all_inputs_df = pd.concat([train_inputs_df, val_inputs_df])
         all_targets_df = pd.concat([train_targets_df, val_targets_df])
 
+        # Identify columns to normalize vs keep raw
+        input_cols_all = all_inputs_df.columns.tolist()
+        target_cols_all = all_targets_df.columns.tolist()
+        
+        # Columns containing sin/cos should NOT be normalized
+        input_cols_to_normalize = [c for c in input_cols_all if 'sin' not in c and 'cos' not in c]
+        input_cols_sincos = [c for c in input_cols_all if 'sin' in c or 'cos' in c]
+        
+        target_cols_to_normalize = [c for c in target_cols_all if 'sin' not in c and 'cos' not in c]
+        target_cols_sincos = [c for c in target_cols_all if 'sin' in c or 'cos' in c]
+        
+        print(f"\nInput columns to normalize (Gaussian): {input_cols_to_normalize}")
+        print(f"Input columns kept raw (sin/cos): {input_cols_sincos}")
+        print(f"Target columns to normalize (Gaussian): {target_cols_to_normalize}")
+        print(f"Target columns kept raw (sin/cos): {target_cols_sincos}")
+
+        # Fit scalers ONLY on the columns that need normalization
         input_scaler = StandardScaler()
         target_scaler = StandardScaler()
-        input_scaler.fit(all_inputs_df)
-        target_scaler.fit(all_targets_df)
+        input_scaler.fit(all_inputs_df[input_cols_to_normalize])
+        target_scaler.fit(all_targets_df[target_cols_to_normalize])
 
         os.makedirs(scalers_dir, exist_ok=True)
         joblib.dump(input_scaler, os.path.join(scalers_dir, 'input_scaler.joblib'))
         joblib.dump(target_scaler, os.path.join(scalers_dir, 'target_scaler.joblib'))
-        print(f"Scalers saved to: {scalers_dir}")
+        
+        # Also save the column order info for inference
+        col_info = {
+            'input_cols_all': input_cols_all,
+            'input_cols_to_normalize': input_cols_to_normalize,
+            'input_cols_sincos': input_cols_sincos,
+            'target_cols_all': target_cols_all,
+            'target_cols_to_normalize': target_cols_to_normalize,
+            'target_cols_sincos': target_cols_sincos,
+        }
+        joblib.dump(col_info, os.path.join(scalers_dir, 'column_info.joblib'))
+        print(f"Scalers and column_info saved to: {scalers_dir}")
 
-        train_inputs_np = input_scaler.transform(train_inputs_df)
-        val_inputs_np = input_scaler.transform(val_inputs_df)
-        train_targets_np = target_scaler.transform(train_targets_df)
-        val_targets_np = target_scaler.transform(val_targets_df)
+        def _apply_partial_normalization(df, scaler, cols_to_norm, cols_sincos, all_cols):
+            """Apply scaler only to specific columns, keep others raw."""
+            result = np.zeros((len(df), len(all_cols)), dtype=np.float32)
+            # Transform the columns that need normalization
+            normalized_part = scaler.transform(df[cols_to_norm])
+            # Get raw sin/cos columns
+            raw_sincos_part = df[cols_sincos].values
+            
+            # Reassemble in original column order
+            for i, col in enumerate(all_cols):
+                if col in cols_to_norm:
+                    idx_in_norm = cols_to_norm.index(col)
+                    result[:, i] = normalized_part[:, idx_in_norm]
+                else:  # sin/cos column
+                    idx_in_sincos = cols_sincos.index(col)
+                    result[:, i] = raw_sincos_part[:, idx_in_sincos]
+            return result
+
+        # ===================== DEBUG: BEFORE NORMALIZATION =====================
+        print("\n" + "="*80)
+        print("DEBUG: RAW DATA STATISTICS (BEFORE NORMALIZATION)")
+        print("="*80)
+        
+        # Pick 5 samples from the middle of the dataset for detailed inspection
+        n_samples = len(all_inputs_df)
+        mid_start = max(0, n_samples // 2 - 2)
+        mid_indices = list(range(mid_start, min(mid_start + 5, n_samples)))
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'INPUT FEATURES':^78}│")
+        print(f"│{'Total samples: ' + str(n_samples):^78}│")
+        print(f"└{'─'*78}┘")
+        print(f"\nFeature names ({len(all_inputs_df.columns)} features):")
+        # Print feature names in a grid format
+        cols = all_inputs_df.columns.tolist()
+        for i in range(0, len(cols), 4):
+            row = cols[i:i+4]
+            print("  " + "  |  ".join(f"{c:20s}" for c in row))
+        
+        print(f"\n{'─'*80}")
+        print("Input Statistics (per feature):")
+        print("─"*80)
+        stats_df = all_inputs_df.describe().T
+        stats_df = stats_df[['mean', 'std', 'min', '25%', '50%', '75%', 'max']]
+        print(stats_df.to_string())
+        
+        print(f"\n{'─'*80}")
+        print(f"5 SAMPLE INPUTS FROM MIDDLE (indices {mid_indices})")
+        print("─"*80)
+        sample_inputs = all_inputs_df.iloc[mid_indices].T  # Transpose for better readability
+        print(sample_inputs.to_string())
+        
+        print(f"\n\n┌{'─'*78}┐")
+        print(f"│{'TARGET FEATURES':^78}│")
+        print(f"└{'─'*78}┘")
+        print(f"\nFeature names: {all_targets_df.columns.tolist()}")
+        
+        print(f"\n{'─'*80}")
+        print("Target Statistics (per feature):")
+        print("─"*80)
+        stats_tgt = all_targets_df.describe().T
+        stats_tgt = stats_tgt[['mean', 'std', 'min', '25%', '50%', '75%', 'max']]
+        print(stats_tgt.to_string())
+        
+        print(f"\n{'─'*80}")
+        print(f"5 SAMPLE TARGETS FROM MIDDLE (indices {mid_indices})")
+        print("─"*80)
+        sample_targets = all_targets_df.iloc[mid_indices].T  # Transpose for better readability
+        print(sample_targets.to_string())
+        
+        # ===================== DEBUG: SCALER PARAMETERS =====================
+        print("\n\n" + "="*80)
+        print("DEBUG: SCALER PARAMETERS (FITTED)")
+        print("="*80)
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'INPUT SCALER (only x, y, v, w columns)':^78}│")
+        print(f"└{'─'*78}┘")
+        print(f"\nFeature names: {input_scaler.feature_names_in_.tolist()}")
+        print(f"\n{'Feature':<25} {'Mean':>15} {'Std (Scale)':>15} {'Variance':>15}")
+        print("─"*70)
+        for i, feat in enumerate(input_scaler.feature_names_in_):
+            print(f"{feat:<25} {input_scaler.mean_[i]:>15.6f} {input_scaler.scale_[i]:>15.6f} {input_scaler.var_[i]:>15.6f}")
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'TARGET SCALER (only x, y columns)':^78}│")
+        print(f"└{'─'*78}┘")
+        print(f"\nFeature names: {target_scaler.feature_names_in_.tolist()}")
+        print(f"\n{'Feature':<25} {'Mean':>15} {'Std (Scale)':>15} {'Variance':>15}")
+        print("─"*70)
+        for i, feat in enumerate(target_scaler.feature_names_in_):
+            print(f"{feat:<25} {target_scaler.mean_[i]:>15.6f} {target_scaler.scale_[i]:>15.6f} {target_scaler.var_[i]:>15.6f}")
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'SIN/COS COLUMNS (NOT normalized, kept raw)':^78}│")
+        print(f"└{'─'*78}┘")
+        print(f"Input sin/cos cols: {input_cols_sincos}")
+        print(f"Target sin/cos cols: {target_cols_sincos}")
+
+        # Apply partial normalization
+        train_inputs_np = _apply_partial_normalization(
+            train_inputs_df, input_scaler, input_cols_to_normalize, input_cols_sincos, input_cols_all)
+        val_inputs_np = _apply_partial_normalization(
+            val_inputs_df, input_scaler, input_cols_to_normalize, input_cols_sincos, input_cols_all)
+        train_targets_np = _apply_partial_normalization(
+            train_targets_df, target_scaler, target_cols_to_normalize, target_cols_sincos, target_cols_all)
+        val_targets_np = _apply_partial_normalization(
+            val_targets_df, target_scaler, target_cols_to_normalize, target_cols_sincos, target_cols_all)
+        
+        # ===================== DEBUG: AFTER NORMALIZATION =====================
+        print("\n\n" + "="*80)
+        print("DEBUG: NORMALIZED DATA STATISTICS (AFTER PARTIAL NORMALIZATION)")
+        print("="*80)
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'NORMALIZED TRAIN INPUTS':^78}│")
+        print(f"│{'Shape: ' + str(train_inputs_np.shape):^78}│")
+        print(f"└{'─'*78}┘")
+        
+        print(f"\n{'Feature':<25} {'Min':>12} {'Max':>12} {'Mean':>12} {'Std':>12} {'Normalized?':>12}")
+        print("─"*85)
+        for i, feat in enumerate(input_cols_all):
+            is_norm = "YES" if feat in input_cols_to_normalize else "NO (sin/cos)"
+            print(f"{feat:<25} {train_inputs_np[:, i].min():>12.4f} {train_inputs_np[:, i].max():>12.4f} {train_inputs_np[:, i].mean():>12.4f} {train_inputs_np[:, i].std():>12.4f} {is_norm:>12}")
+        
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'NORMALIZED TRAIN TARGETS':^78}│")
+        print(f"│{'Shape: ' + str(train_targets_np.shape):^78}│")
+        print(f"└{'─'*78}┘")
+        
+        print(f"\n{'Feature':<25} {'Min':>12} {'Max':>12} {'Mean':>12} {'Std':>12} {'Normalized?':>12}")
+        print("─"*85)
+        for i, feat in enumerate(target_cols_all):
+            is_norm = "YES" if feat in target_cols_to_normalize else "NO (sin/cos)"
+            print(f"{feat:<25} {train_targets_np[:, i].min():>12.4f} {train_targets_np[:, i].max():>12.4f} {train_targets_np[:, i].mean():>12.4f} {train_targets_np[:, i].std():>12.4f} {is_norm:>12}")
+        
+        # Show the same 5 samples after normalization
+        all_inputs_np = _apply_partial_normalization(
+            all_inputs_df, input_scaler, input_cols_to_normalize, input_cols_sincos, input_cols_all)
+        all_targets_np = _apply_partial_normalization(
+            all_targets_df, target_scaler, target_cols_to_normalize, target_cols_sincos, target_cols_all)
+        
+        print(f"\n{'─'*80}")
+        print(f"5 SAMPLE INPUTS FROM MIDDLE - AFTER NORMALIZATION (indices {mid_indices})")
+        print("─"*80)
+        print(f"\n{'Feature':<20}", end="")
+        for idx in mid_indices:
+            print(f"{'Sample '+str(idx):>14}", end="")
+        print()
+        print("─"*90)
+        for i, feat in enumerate(input_cols_all):
+            print(f"{feat:<20}", end="")
+            for idx in mid_indices:
+                print(f"{all_inputs_np[idx, i]:>14.4f}", end="")
+            print()
+        
+        print(f"\n{'─'*80}")
+        print(f"5 SAMPLE TARGETS FROM MIDDLE - AFTER NORMALIZATION (indices {mid_indices})")
+        print("─"*80)
+        print(f"\n{'Feature':<20}", end="")
+        for idx in mid_indices:
+            print(f"{'Sample '+str(idx):>14}", end="")
+        print()
+        print("─"*90)
+        for i, feat in enumerate(target_cols_all):
+            print(f"{feat:<20}", end="")
+            for idx in mid_indices:
+                print(f"{all_targets_np[idx, i]:>14.4f}", end="")
+            print()
+        
+        # ===================== DEBUG: SANITY CHECKS =====================
+        print("\n\n" + "="*80)
+        print("DEBUG: SANITY CHECKS")
+        print("="*80)
+        
+        # Check sin/cos columns - sin^2 + cos^2 should be ~1 BEFORE normalization
+        print(f"\n┌{'─'*78}┐")
+        print(f"│{'Checking sin² + cos² for yaw (BEFORE normalization)':^78}│")
+        print(f"│{'Expected: ≈ 1.0 for all':^78}│")
+        print(f"└{'─'*78}┘")
+        
+        print(f"\n{'History Step':<20} {'Min':>15} {'Max':>15} {'Mean':>15}")
+        print("─"*65)
+        for i in range(history_length):
+            sin_col = f"yaw_sin_h{i}"
+            cos_col = f"yaw_cos_h{i}"
+            if sin_col in all_inputs_df.columns and cos_col in all_inputs_df.columns:
+                sin_vals = all_inputs_df[sin_col].values
+                cos_vals = all_inputs_df[cos_col].values
+                norm_check = sin_vals**2 + cos_vals**2
+                print(f"h{i:<19} {norm_check.min():>15.6f} {norm_check.max():>15.6f} {norm_check.mean():>15.6f}")
+        
+        # Target sin/cos check
+        sin_next = all_targets_df["yaw_sin_next"].values
+        cos_next = all_targets_df["yaw_cos_next"].values
+        norm_check_tgt = sin_next**2 + cos_next**2
+        print(f"{'target':<20} {norm_check_tgt.min():>15.6f} {norm_check_tgt.max():>15.6f} {norm_check_tgt.mean():>15.6f}")
+        
+        print("\n" + "="*80 + "\n")
     else:
         print("Skipping normalization. Using raw values.")
         input_scaler = None

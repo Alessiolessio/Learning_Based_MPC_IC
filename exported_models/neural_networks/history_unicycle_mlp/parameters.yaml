@@ -14,7 +14,7 @@ training_params:
   # Validation split ratio (random split, not episode-based)
   val_split: 0.3
   # Number of history steps in the input window
-  history_length: 10
+  history_length: 5
 
 model_params:
   # Hidden layer sizes

@@ -1,21 +1,18 @@
 paths:
-  # CSV used for training/validation
   csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv
-  # Base directory for run artifacts (model, scalers, plots, snapshot)
   base_save_dir: trained_models
-
 training_params:
-  # Training hyperparameters
   epochs: 200
   batch_size: 64
   learning_rate: 1.0e-05
   val_split: 0.3
-
+  history_length: 10
 model_params:
-  # Model architecture
-  input_dim: 5
-  output_dim: 3
   hidden_layers:
-    - 64
-    - 64
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
+  - 256
   p_dropout: 0.0

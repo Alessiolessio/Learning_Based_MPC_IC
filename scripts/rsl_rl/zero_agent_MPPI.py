@@ -8,6 +8,7 @@ Script to run an environment with an MPPI controller (replacing the previous NMP
 Key fixes:
 - Ensure all cost matrices (Q, R, P) live on the same device as MPPI (cuda/cpu) and in float64 (double).
 - Compute quadratic costs with a robust pattern: sum(z * (z @ M), dim=-1).
+- Run MPPI on GPU when available; avoid unnecessary CPU<->GPU transfers.
 """
 
 import argparse
@@ -34,13 +35,16 @@ simulation_app = app_launcher.app
 # -----------------------------------------------------------------------------
 import gymnasium as gym
 import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import sys
 from pathlib import Path
 import os
 import datetime
 import numpy as np
-from typing import Dict, Optional
+import yaml
+import joblib
+from typing import Optional
 
 # Project / Isaac Lab utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,6 +54,24 @@ from isaaclab.utils import math as ilmath
 
 # MPPI (PyPI: pytorch-mppi==0.4.2)
 from pytorch_mppi import MPPI
+
+# =============================================================================
+# MLP Dynamics - Simple self-contained inference function
+# =============================================================================
+# Path to trained MLP model (change this to use a different model)
+MLP_MODEL_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/history_mlp/trained_models/model_hist_5_epoch_200_batch_64_lr_1e-05_vs_30_hl_256_256_256_256_256_256"
+
+# Global cache for MLP model and scalers (loaded once on first call)
+_mlp_cache = {
+    "model": None,
+    "input_mean": None,
+    "input_scale": None,
+    "target_mean": None,
+    "target_scale": None,
+    "history_length": None,
+    "device": None,
+    "loaded": False,
+}
 
 # =============================================================================
 # Plotting utilities
@@ -170,36 +192,29 @@ def current_euler_obs(policy_obs: torch.Tensor):
     return torch.stack([vx, vy, vz, wx, wy, wz, x, y, z, roll, pitch, yaw], dim=1)
 
 # =============================================================================
-# MPPI configuration (scalars and CPU defaults; we will move to device later)
+# MPPI configuration (scalars; moved to device later)
 # =============================================================================
-DT_SIM = 0.1                     # simulation/control dt used by unicycle model
+DT_SIM = 0.1
 NX = 3                           # [x, y, theta]
 NU = 2                           # [v, w]
-ACTION_LOW = torch.tensor([-2.0, -2.0], dtype=torch.double)   # v>=0 (no reverse)
-ACTION_HIGH = torch.tensor([2.0,  2.0], dtype=torch.double)
+ACTION_LOW  = torch.tensor([-2.0, -2.0], dtype=torch.double)
+ACTION_HIGH = torch.tensor([ 2.0,  2.0], dtype=torch.double)
 
 N_SAMPLES = 1024
 TIMESTEPS = 15
-LAMBDA = 1.0
+LAMBDA = 0.1
 NOISE_SIGMA = torch.diag(torch.tensor([0.35, 0.35], dtype=torch.double))
 
-# Quadratic cost weights (will be moved to the proper device in main())
 Q_torch = torch.diag(torch.tensor([10.0, 10.0, 0.0], dtype=torch.double))
 R_torch = torch.diag(torch.tensor([0.1, 0.00001], dtype=torch.double))
 P_torch = torch.diag(torch.tensor([100.0, 100.0, 0.0], dtype=torch.double))
 
-# Global target (updated in main loop)
 target_position_torch = None
 
 # =============================================================================
 # Dynamics and cost
 # =============================================================================
 def unicycle_dynamics(x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-    """
-    Discrete-time unicycle dynamics (Euler integration), vectorized, in float64 (double).
-    x: (..., 3) = [x, y, theta]
-    u: (..., 2) = [v, w]
-    """
     V = u[..., 0]
     w = u[..., 1]
     theta = x[..., 2]
@@ -207,34 +222,124 @@ def unicycle_dynamics(x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
     x_next[..., 0] = x[..., 0] + DT_SIM * (V * torch.cos(theta))
     x_next[..., 1] = x[..., 1] + DT_SIM * (V * torch.sin(theta))
     x_next[..., 2] = x[..., 2] + DT_SIM * w
-    # wrap angle to [-pi, pi]
     x_next[..., 2] = torch.atan2(torch.sin(x_next[..., 2]), torch.cos(x_next[..., 2]))
     return x_next
 
-def running_cost(x: torch.Tensor, u: torch.Tensor, *args) -> torch.Tensor:
+def mlp_dynamics(x: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
     """
-    Quadratic running cost. Accepts (x, u) or (x, u, t).
-    - If 't' is given and equals TIMESTEPS-1, add terminal cost with P.
-    - If 't' is None (MPPI calls step-independent), no terminal term is added here.
-    Robust quadratic form: sum(z * (z @ M), dim=-1) to handle arbitrary batch ranks.
+    MLP-based dynamics function compatible with MPPI.
+    Loads model/scalers on first call, then performs batched inference.
+    
+    Args:
+        x: State tensor [..., 3] with [x, y, theta]
+        u: Action tensor [..., 2] with [v, w]
+        
+    Returns:
+        x_next: Next state tensor [..., 3] with [x_next, y_next, theta_next]
     """
-    global target_position_torch, Q_torch, R_torch, P_torch
+    global _mlp_cache
+    
+    # Load model on first call
+    if not _mlp_cache["loaded"]:
+        device = x.device
+        
+        # Load config
+        config_path = os.path.join(MLP_MODEL_PATH, "config_snapshot.yaml")
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f)
+        
+        history_length = cfg["training_params"].get("history_length", 1)
+        hidden_layers = cfg["model_params"]["hidden_layers"]
+        p_dropout = cfg["model_params"].get("p_dropout", 0.0)
+        
+        # Build model (same architecture as training)
+        input_dim = 5 * history_length  # [x, y, yaw, v, w] * H
+        output_dim = 3  # [x_next, y_next, yaw_next]
+        
+        layers = []
+        in_d = input_dim
+        for h in hidden_layers:
+            layers += [nn.Linear(in_d, h), nn.ReLU()]
+            if p_dropout > 0:
+                layers.append(nn.Dropout(p=p_dropout))
+            in_d = h
+        layers.append(nn.Linear(in_d, output_dim))
+        model = nn.Sequential(*layers).to(device)
+        
+        # Load weights (strip "model." prefix from keys since original was wrapped in a class)
+        model_path = os.path.join(MLP_MODEL_PATH, "mlp_dynamics.pth")
+        state_dict = torch.load(model_path, map_location=device)
+        # Remove "model." prefix from keys if present
+        state_dict = {k.replace("model.", ""): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict)
+        model.eval()
+        
+        # Load scalers and convert to torch tensors
+        input_scaler = joblib.load(os.path.join(MLP_MODEL_PATH, "input_scaler.joblib"))
+        target_scaler = joblib.load(os.path.join(MLP_MODEL_PATH, "target_scaler.joblib"))
+        
+        # Cache everything
+        _mlp_cache["model"] = model
+        _mlp_cache["input_mean"] = torch.tensor(input_scaler.mean_, dtype=torch.float32, device=device)
+        _mlp_cache["input_scale"] = torch.tensor(input_scaler.scale_, dtype=torch.float32, device=device)
+        _mlp_cache["target_mean"] = torch.tensor(target_scaler.mean_, dtype=torch.float32, device=device)
+        _mlp_cache["target_scale"] = torch.tensor(target_scaler.scale_, dtype=torch.float32, device=device)
+        _mlp_cache["history_length"] = history_length
+        _mlp_cache["device"] = device
+        _mlp_cache["loaded"] = True
+        
+        print(f"[MLP] Loaded model from: {MLP_MODEL_PATH}")
+        print(f"[MLP] Device: {device}, History: {history_length}, Hidden: {hidden_layers}")
+    
+    # Get cached values
+    model = _mlp_cache["model"]
+    input_mean = _mlp_cache["input_mean"]
+    input_scale = _mlp_cache["input_scale"]
+    target_mean = _mlp_cache["target_mean"]
+    target_scale = _mlp_cache["target_scale"]
+    H = _mlp_cache["history_length"]
+    
+    # Remember original shape
+    original_shape = x.shape[:-1]
+    
+    # Flatten to [batch, 3] and [batch, 2]
+    x_flat = x.reshape(-1, 3).float()
+    u_flat = u.reshape(-1, 2).float()
+    
+    # Build input: [x, y, yaw, v, w] repeated H times
+    state_action = torch.cat([x_flat, u_flat], dim=-1)  # [batch, 5]
+    mlp_input = state_action.repeat(1, H)  # [batch, 5*H]
+    
+    # Normalize: (x - mean) / scale
+    mlp_input = (mlp_input - input_mean) / input_scale
+    
+    # Inference
+    with torch.no_grad():
+        mlp_output = model(mlp_input)
+    
+    # Denormalize: y * scale + mean
+    output = mlp_output * target_scale + target_mean
+    
+    # Wrap theta to (-pi, pi]
+    output[..., 2] = torch.atan2(torch.sin(output[..., 2]), torch.cos(output[..., 2]))
+    
+    # Reshape and convert back to double (MPPI dtype)
+    return output.reshape(*original_shape, 3).double()
 
+
+def running_cost(x: torch.Tensor, u: torch.Tensor, *args) -> torch.Tensor:
+    global target_position_torch, Q_torch, R_torch, P_torch
     t = args[0] if len(args) > 0 else None
 
-    # Broadcast x_ref to match x's rank
     x_ref = target_position_torch
     while x_ref.ndim < x.ndim:
         x_ref = x_ref.unsqueeze(0)
 
-    dx = x - x_ref  # (..., 3)
-
-    # State and control quadratic costs: sum(z * (z @ M), dim=-1)
+    dx = x - x_ref
     state_cost = torch.sum(dx * dx.matmul(Q_torch), dim=-1)
-    ctrl_cost = torch.sum(u * u.matmul(R_torch), dim=-1)
+    ctrl_cost  = torch.sum(u  *  u.matmul(R_torch), dim=-1)
     cost = state_cost + ctrl_cost
 
-    # Terminal cost only on the last step when 't' is provided by MPPI
     if (t is not None) and (t == TIMESTEPS - 1):
         term_cost = torch.sum(dx * dx.matmul(P_torch), dim=-1)
         cost = cost + term_cost
@@ -245,10 +350,6 @@ def running_cost(x: torch.Tensor, u: torch.Tensor, *args) -> torch.Tensor:
 # Waypoint generator
 # =============================================================================
 def waypoint_generator(current_position, r_max, r_min, theta_max, theta_min):
-    """
-    Sample a relative waypoint (x_goal, y_goal, theta_goal) from current pose.
-    Angle is wrapped to [-pi, pi].
-    """
     x_curr, y_curr, theta_curr = current_position
     r = np.random.uniform(r_min, r_max)
     theta_rel = np.random.uniform(theta_min, theta_max)
@@ -262,43 +363,36 @@ def waypoint_generator(current_position, r_max, r_min, theta_max, theta_min):
 # Main control loop
 # =============================================================================
 def main():
-    """
-    1) Build Isaac Lab env on desired device.
-    2) Instantiate MPPI (double precision) on the same device.
-    3) Keep cost matrices (Q, R, P) and targets on that device.
-    4) Loop: read obs -> build state -> waypoint update -> MPPI.command -> env.step -> log/reset.
-    """
-    # -- 1) Parse cfg and create env on Isaac's device
+    # 1) Build Isaac Lab env (device here is the physics/env device; MPPI device can differ)
     env_cfg = parse_env_cfg(
         args_cli.task,
         device=args_cli.device,
         num_envs=args_cli.num_envs,
         use_fabric=not args_cli.disable_fabric,
     )
-    # apply_overrides_train(env_cfg)  # if you use overrides
-
     env = gym.make(args_cli.task, cfg=env_cfg)
     num_envs = env.unwrapped.num_envs   # type: ignore
-    device = env.unwrapped.device       # type: ignore
+    device   = env.unwrapped.device     # type: ignore
     action_dim = 2
 
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space:      {env.action_space}")
 
-    # -- 2) Instantiate MPPI on the same device (or CLI-provided device)
-    device_torch = torch.device(args_cli.device if args_cli.device is not None else device)
+    # 2) Force MPPI to use GPU if available (minimal change)
+    device_torch = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO]: MPPI device: {device_torch}")
 
-    # Move *all* constants that will be used inside running_cost to the SAME device & dtype
+    # Keep all MPPI-related tensors on the same device and dtype
     global Q_torch, R_torch, P_torch
     Q_torch = Q_torch.to(device=device_torch, dtype=torch.double)
     R_torch = R_torch.to(device=device_torch, dtype=torch.double)
     P_torch = P_torch.to(device=device_torch, dtype=torch.double)
 
     ctrl = MPPI(
-        dynamics=unicycle_dynamics,
-        running_cost=running_cost,            # accepts (x,u) or (x,u,t)
+        dynamics=mlp_dynamics,  # Change to mlp_dynamics for learned model
+        running_cost=running_cost,
         nx=NX,
-        noise_sigma=NOISE_SIGMA.to(device_torch),
+        noise_sigma=NOISE_SIGMA.to(device=device_torch, dtype=torch.double),
         num_samples=N_SAMPLES,
         horizon=TIMESTEPS,
         lambda_=LAMBDA,
@@ -307,19 +401,18 @@ def main():
         u_max=ACTION_HIGH.to(device_torch),
     )
 
-    # -- 3) Reset env and prepare logging/waypoints
+    # 3) Reset env and prepare logging/waypoints
     env.reset()
 
-    delay_steps = 100  # wait a bit before starting control to stabilize measurements
+    delay_steps = 100
     histories = [{"pos_x": [], "pos_y": [], "theta": [], "vel_x": [], "vel_y": [], "omega": [], "waypoints": []}
                  for _ in range(num_envs)]
-    LOG_DIR = "/home/nexus/VQ_PMC/logs"
+    LOG_DIR = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/mppi_trajectories"
     step_counter = 0
     obs = None
 
     # Waypoint sampling parameters
-    R_MIN = 1.0 
-    R_MAX = 2.0
+    R_MIN, R_MAX = 1.0, 2.0
     THETA_MIN = - (np.pi * 7) / 18
     THETA_MAX =   (np.pi * 7) / 18
     WAYPOINT_TOLERANCE = 0.1
@@ -336,20 +429,23 @@ def main():
     global target_position_torch
     target_position_torch = torch.from_numpy(target_position_np).to(dtype=torch.double, device=device_torch)
 
-    # -- 4) Control loop
+    # 4) Control loop
     while simulation_app.is_running():
         with torch.inference_mode():
-            # Always build a (num_envs, action_dim) tensor on Isaac's device
             actions = torch.zeros((num_envs, action_dim), device=device)
 
-            # Start controlling after a short delay
             if obs is not None and (step_counter >= delay_steps):
-                policy_obs = obs['policy']                       # (N, 13)
-                euler_obs = current_euler_obs(policy_obs)        # (N, 12)
-                current_state_torch32 = euler_obs[:, [6, 7, 11]] # (N, 3): x, y, yaw
-                current_state_np = current_state_torch32.cpu().numpy()
+                policy_obs = obs['policy']
+                euler_obs = current_euler_obs(policy_obs)
+                current_state_torch32 = euler_obs[:, [6, 7, 11]]  # (N,3): x, y, yaw
 
-                # Switch to next waypoint if current is reached
+                # --- Use torch tensor directly on MPPI device (no CPU roundtrip) ---
+                x_now = current_state_torch32.to(device=device_torch, dtype=torch.double)
+
+                # For waypoint switching logic (distance), keep NumPy copy
+                current_state_np = current_state_torch32.detach().cpu().numpy()
+
+                # Waypoint switching
                 for i in range(num_envs):
                     dist = np.hypot(current_state_np[i, 0] - target_position_np[i, 0],
                                     current_state_np[i, 1] - target_position_np[i, 1])
@@ -365,10 +461,7 @@ def main():
                 # Update global target on MPPI device
                 target_position_torch = torch.from_numpy(target_position_np).to(dtype=torch.double, device=device_torch)
 
-                # Current state for MPPI (double on MPPI device)
-                x_now = torch.from_numpy(current_state_np).to(dtype=torch.double, device=device_torch)
-
-                # MPPI outputs (num_envs, 2) on device_torch (double)
+                # MPPI on GPU
                 u_cmd = ctrl.command(x_now)
 
                 # Apply to Isaac (float32 on env device)
@@ -378,7 +471,7 @@ def main():
             obs, reward, terminated, truncated, info = env.step(actions)
             step_counter += 1
 
-            # Lightweight logging (guard shapes)
+            # Lightweight logging
             if obs is not None:
                 try:
                     policy_obs = obs['policy']
@@ -412,8 +505,6 @@ def main():
 
                 env.reset()
                 step_counter = 0
-
-                # Refresh global target after reset
                 target_position_torch = torch.from_numpy(target_position_np).to(dtype=torch.double, device=device_torch)
 
     env.close()

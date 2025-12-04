@@ -1,0 +1,19 @@
+1. Arrumar a normalizacao (history_sincos_mlp/data_preparation.py)
+	Esta:	x, y, yaw, v, w
+		x, y, sin_yaw, cos_yaw, v, w
+		g_x, g_y, g_sin_yaw, g_cos_yaw, g_v, g_w
+	Quero:	x, y, yaw, v, w
+		x, y, sin_yaw, cos_yaw, v, w
+		g_x, g_y, sin_yaw, cos_yaw, g_v, g_w
+		
+2. Fazer o test_mlp_model testar para todos os 5 episodes ao inves de só 1		
+
+3. Testar treino com Dataset sem a actions estarem multiplicadas pela constante K
+
+4. Fazer 1 inferência da rede no MPPI 
+
+5. Fazer 1 inferência da rede no MPPI multiplicando V e W pelo fator K do dataset antes de fazer a inferência
+
+6. Treinar com f_uni(x, u) - f_NN(x, u) = f_real(x, u) 
+	Logo:	f_NN = f_uni(x, u) - f_real(x, u)	onde f_real(x, u) vem do dataset
+	Antes:	f_NN = f_real(x, u)
