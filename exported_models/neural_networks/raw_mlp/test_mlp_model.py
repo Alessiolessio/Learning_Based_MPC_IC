@@ -27,9 +27,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # --------------------- USER CONFIG ---------------------
-CSV_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc_test.csv"
-MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp/trained_models/model_epoch_500_batch_64_lr_1e-05_vs_30_hl_256_256_256_256"
+CSV_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/datasets_raw/dataset_nmpc_test_raw.csv"
+MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/raw_mlp/trained_models/model_epoch_200_batch_64_lr_1e-05_vs_30_hl_32_32"
 DT = 0.02  # time step for unicycle baseline
+# Action scaling constants for unicycle model (must match dataset preprocessing)
+KV = 0.2839
+KW = 0.13
 # -------------------------------------------------------
 
 # Derived artifact paths
@@ -81,7 +84,7 @@ def rollout_unicycle(x0, y0, th0, v_arr, w_arr, dt):
     x_pred[0], y_pred[0] = x, y
 
     for k in range(n - 1):
-        v, w = float(v_arr[k]), float(w_arr[k])
+        v, w = float(v_arr[k]) * KV, float(w_arr[k]) * KW
         x = x + v * math.cos(th) * dt
         y = y + v * math.sin(th) * dt
         th = wrap_to_pi(th + w * dt)

@@ -28,9 +28,12 @@ matplotlib.use("Agg")  # headless rendering
 import matplotlib.pyplot as plt
 
 # ------------------------- USER-PROVIDED PATHS -------------------------
-MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/history_sincos_mlp/trained_models/model_hist_5_epoch_400_batch_64_lr_1e-05_vs_30_hl_512_512_512_512_512"
-CSV_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_nmpc_test.csv"
+MODEL_BASE_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/exported_models/neural_networks/history_sincos_mlp/trained_models/model_hist_5_epoch_150_batch_128_lr_1e-05_vs_30_hl_64_64_64"
+CSV_PATH = "/home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/datasets_raw/dataset_nmpc_test_raw.csv"
 DT = 0.02  # integration step (s)
+# Action scaling constants (must match dataset preprocessing)
+KV = 0.2839
+KW = 0.13
 # ----------------------------------------------------------------------
 
 MODEL_PATH = os.path.join(MODEL_BASE_PATH, "mlp_dynamics.pth")
@@ -75,12 +78,13 @@ def wrap_to_pi(a: float) -> float:
 
 def rollout_unicycle(x0, y0, th0, v_arr, w_arr, dt):
     """Simple unicycle forward integration for comparison plots."""
+    
     n = len(v_arr)
     x_pred, y_pred = np.empty(n), np.empty(n)
     x, y, th = float(x0), float(y0), float(th0)
     x_pred[0], y_pred[0] = x, y
     for k in range(n - 1):
-        v, w = float(v_arr[k]), float(w_arr[k])
+        v, w = float(v_arr[k]) * KV, float(w_arr[k]) * KW
         x += v * math.cos(th) * dt
         y += v * math.sin(th) * dt
         th = wrap_to_pi(th + w * dt)

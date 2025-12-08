@@ -11,6 +11,7 @@ optimizing MSE while logging per-component MAE (x, y, yaw) for visualization.
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 # Names for per-component MAE logging (visual inspection only)
@@ -22,9 +23,10 @@ def _init_component_logs():
     return {name: [] for name in TARGET_NAMES}
 
 
-def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, device="cuda"):
+def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, device="cuda",
+                scheduler_enabled=True, scheduler_factor=0.5, scheduler_patience=20, scheduler_min_lr=1e-6, scheduler_threshold=1e-4):
     """
-    Execute the training/validation loop.
+    Execute the training/validation loop with optional learning rate scheduling.
 
     Returns:
         (train_losses, val_losses, train_l1_per_comp, val_l1_per_comp)
@@ -44,6 +46,18 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, 
     # -- Optimizer and primary objective (MSE) --
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
+    
+    # -- Learning rate scheduler (reduce on plateau) --
+    scheduler = None
+    if scheduler_enabled:
+        scheduler = ReduceLROnPlateau(
+            optimizer, mode='min', factor=scheduler_factor,
+            patience=scheduler_patience, min_lr=scheduler_min_lr,
+            threshold=scheduler_threshold, threshold_mode='rel'
+        )
+        print(f"LR Scheduler enabled: factor={scheduler_factor}, patience={scheduler_patience}, min_lr={scheduler_min_lr}")
+    else:
+        print("LR Scheduler disabled.")
 
     # -- Global loss histories --
     train_losses, val_losses = [], []
@@ -127,11 +141,16 @@ def train_model(model, train_data, val_data, epochs, learning_rate, batch_size, 
         for i, name in enumerate(TARGET_NAMES):
             val_l1_per_comp[name].append(comp_mae_val[i])
 
+        # Step the scheduler based on validation loss (if enabled)
+        if scheduler is not None:
+            scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
         # Pretty console print with both MSE and MAE
         mae_tr = ", ".join([f"{k}: {train_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
         mae_vl = ", ".join([f"{k}: {val_l1_per_comp[k][-1]:.6f}" for k in TARGET_NAMES])
         print(
-            f"Epoch {epoch+1}/{epochs} | Train MSE: {train_loss:.6f} | Val MSE: {val_loss:.6f} | "
+            f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.2e} | Train MSE: {train_loss:.6f} | Val MSE: {val_loss:.6f} | "
             f"Train MAE [{mae_tr}] | Val MAE [{mae_vl}]"
         )
 

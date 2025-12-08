@@ -3,15 +3,15 @@
 
 paths:
   # Path to the dataset CSV used for training/validation
-  csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv
+  csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/datasets_raw/dataset_random_raw.csv
   # Base directory where run artifacts (model, scalers, plots, snapshot) will be stored
   base_save_dir: trained_models
 
 training_params:
   # Number of training epochs
-  epochs: 1000
+  epochs: 150
   # Batch size for DataLoader
-  batch_size: 64
+  batch_size: 128
   # Learning rate for Adam
   learning_rate: 1.0e-05
   # Validation split ratio (episode-based split)
@@ -22,10 +22,8 @@ training_params:
 model_params:
   # Hidden layer sizes
   hidden_layers:
-    - 512
-    - 512
-    - 512
-    - 512
-    - 512
+    - 64
+    - 64
+    - 64
   # Dropout probability (0.0 disables Dropout)
   p_dropout: 0.0

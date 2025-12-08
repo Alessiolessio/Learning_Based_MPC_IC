@@ -17,3 +17,15 @@
 6. Treinar com f_uni(x, u) - f_NN(x, u) = f_real(x, u) 
 	Logo:	f_NN = f_uni(x, u) - f_real(x, u)	onde f_real(x, u) vem do dataset
 	Antes:	f_NN = f_real(x, u)
+	
+7. Marcar Waypoint 3D no isaaclab
+
+8. Colocar seta para action (azul) & cmd_vel (verde)
+
+9. Adicionar rastro em 3D no isaaclab
+
+10. add learning scheaduler to the learning rate, wherever it is suposed to go in the raw_mlp folder.
+
+11. Normalizar raw_mlp com sincos no yaw, igual no history_mlp
+
+12. Treinar com rede pequena no history_mlp e history_sincos_mlp

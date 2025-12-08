@@ -1,6 +1,6 @@
 paths:
   # CSV used for training/validation
-  csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/dataset_random.csv
+  csv_path: /home/nexus/VQ_PMCnmpc/VQ_PMC/logs/datasets/datasets_raw/dataset_random_raw.csv
   # Base directory for run artifacts (model, scalers, plots, snapshot)
   base_save_dir: trained_models
 
@@ -8,14 +8,20 @@ training_params:
   # Training hyperparameters
   epochs: 200
   batch_size: 64
-  learning_rate: 1.0e-05
+  learning_rate: 1.0e-05 # 4.0e-03
   val_split: 0.3
+  # Learning rate scheduler (ReduceLROnPlateau)
+  scheduler_enabled: false     # Enable/disable LR scheduler
+  scheduler_factor: 0.5       # Factor to reduce LR by
+  scheduler_patience: 15      # Epochs to wait before reducing LR
+  scheduler_min_lr: 1.0e-06   # Minimum learning rate
+  scheduler_threshold: 1.0e-04  # Minimum improvement to reset patience
 
 model_params:
   # Model architecture
   input_dim: 5
   output_dim: 3
   hidden_layers:
-    - 64
-    - 64
+    - 32
+    - 32
   p_dropout: 0.0
